@@ -9,6 +9,7 @@ import json
 # Hardcoded Keycloak URLs
 KC_TOKEN_AUTH = "{}/realms/{}/protocol/openid-connect/token"
 KC_CLIENT_LIST = "{}/admin/realms/{}/clients/"
+KC_CLIENT_ROLES = "{}/admin/realms/{}/clients/{}/roles"
 KC_GROUP_LIST = "{}/admin/realms/{}/groups/"
 KC_GROUP_DETAILS = "{}/admin/realms/{}/groups/{}"
 KC_ROLE_LIST = "{}/admin/realms/{}/roles"
@@ -17,6 +18,7 @@ KC_CLIENTSCOPE_LIST = "{}/admin/realms/{}/client-scopes/"
 KC_CLIENTSCOPE_DETAILS = "{}/admin/realms/{}/client-scopes/{}/scope-mappings/realm"
 KC_CLIENTSCOPE_COMPOSITE = "{}/admin/realms/{}/client-scopes/{}/scope-mappings/realm/composite"
 KC_EXPORT_URL = "{}/admin/realms/{}/partial-export?exportClients=true&exportGroupsAndRoles=true"
+KC_EXPORT_NO_CLIENTS_URL = "{}/admin/realms/{}/partial-export?exportClients=false&exportGroupsAndRoles=true"
 
 
 ### Network helper functions
@@ -80,13 +82,8 @@ def get_token_client_credential_grant(base_url, auth_realm, client_id, client_se
     return json_response["access_token"]
 
 
-### Main Loop
-def download_config(args: argparse.Namespace):
-    # Remove trailing slash on BASE URL, as Keycloak despises them
+def get_session_token(args: argparse.Namespace):
     base_url = args.base_url.removesuffix("/")
-
-    realm = args.realm
-    output_file: TextIOBase = args.output
     client_secret = args.client_secret
 
     if client_secret is None:
@@ -101,13 +98,52 @@ def download_config(args: argparse.Namespace):
     else:
         print("Unexpected auth_method provided - please file a bug report, this should be impossible")
         return 1
+    return session_token
 
-    export = requests.post(
-        KC_EXPORT_URL.format(base_url, realm), headers={"Authorization": f"Bearer {session_token}"}
-    ).json()
+
+### Main Loop
+def download_config(args: argparse.Namespace):
+    # Remove trailing slash on BASE URL, as Keycloak despises them
+    base_url = args.base_url.removesuffix("/")
+
+    realm = args.realm
+    output_file: TextIOBase = args.output
+    session_token = get_session_token(args)
+    if not args.request_clients:
+        export = requests.post(
+            KC_EXPORT_URL.format(base_url, realm), headers={"Authorization": f"Bearer {session_token}"}
+        ).json()
+
+    else:
+        export = requests.post(
+            KC_EXPORT_NO_CLIENTS_URL.format(base_url, realm), headers={"Authorization": f"Bearer {session_token}"}
+        ).json()
+
+        clients = requests.get(
+            KC_CLIENT_LIST.format(base_url, realm), headers={"Authorization": f"Bearer {session_token}"}
+        ).json()
+
+        all_client_roles = {}
+        for client in clients:
+            response = requests.get(
+                KC_CLIENT_ROLES.format(base_url, realm, client["id"]),
+                headers={"Authorization": f"Bearer {session_token}"},
+            )
+            if response.status_code == 401:
+                session_token = get_session_token(args)
+                response = requests.get(
+                    KC_CLIENT_ROLES.format(base_url, realm, client["id"]),
+                    headers={"Authorization": f"Bearer {session_token}"},
+                )
+                client_roles = response.json()
+            else:
+                client_roles = response.json()
+            all_client_roles[client["id"]] = client_roles
+        export["clients"] = clients
+        export["roles"]["client"] = all_client_roles
 
     # TODO: Do we have checks for groups?
     # export = resolve_composite_roles_for_users(export)
 
     json.dump(export, output_file, indent=4)
-    return None
+    # return None

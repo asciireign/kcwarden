@@ -153,6 +153,14 @@ def add_download_parser(subparsers):
         required=False,
     )
 
+    # There are cases where the realm might be to big to export,
+    # so we fetch the export without the clients and then fetch the clients separatly
+    parser_download.add_argument(
+        "-c",
+        "--request-clients",
+        help="Fetch to clients in seperate api calls, this is needed when the realm export runs into a timeout due to the number of clients",
+        action="store_true",
+    )
     # Authentication method choice
     parser_download.add_argument(
         "-m",
